@@ -1,63 +1,50 @@
-# database.py - mysql database operations for student result system
-# handles connecting, saving data from text file, and running queries for reports
+# database.py - mysql operations for multi-database academic year result system
+# supports separate database per academic year (e.g. cbse_2015, cbse_2017)
 
 import os
 from contextlib import contextmanager
 import mysql.connector
 from mysql.connector import Error
 
-# mysql connection details
+# mysql connection config
 DBCONF = {
     "host": os.environ.get("MYSQL_HOST", "localhost"),
     "user": os.environ.get("MYSQL_USER", "root"),
     "password": os.environ.get("MYSQL_PASSWORD", "1234"),
-    "database": os.environ.get("MYSQL_DATABASE", "student_result_system"),
+    "database": os.environ.get("MYSQL_DATABASE", "cbse_2015"),
     "port": int(os.environ.get("MYSQL_PORT", 3306)),
 }
 
 
+def setdb(db_name):
+    # set active database
+    DBCONF["database"] = str(db_name).strip()
+
+
+def getdb():
+    # get active database
+    return DBCONF.get("database", "cbse_2015")
+
+
 def basecon():
-    # connect without database to create it if not exists
+    # connect without selecting database
     c = DBCONF.copy()
     c.pop("database", None)
     return mysql.connector.connect(**c)
 
 
-def makedb():
-    # create database if not there
-    db = DBCONF.get("database", "student_result_system")
-    con = basecon()
-    cur = con.cursor()
-    try:
-        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}`")
-        con.commit()
-    finally:
-        cur.close()
-        con.close()
-
-
-def checkcon():
-    # check if mysql is connected
-    try:
-        makedb()
-        con = getcon()
-        con.close()
-        return True, "Connected"
-    except Error as e:
-        return False, str(e.msg)
-    except Exception as e:
-        return False, str(e)
-
-
-def getcon():
-    # get connection to mysql
-    return mysql.connector.connect(**DBCONF)
+def getcon(db=None):
+    # get connection to specific or active database
+    c = DBCONF.copy()
+    if db:
+        c["database"] = str(db).strip()
+    return mysql.connector.connect(**c)
 
 
 @contextmanager
-def getcur():
+def getcur(db=None):
     # cursor context manager with auto commit
-    con = getcon()
+    con = getcon(db=db)
     cur = con.cursor(dictionary=True)
     try:
         yield con, cur
@@ -70,10 +57,79 @@ def getcur():
         con.close()
 
 
-def initdb():
-    # create students, subjects and marks tables
-    makedb()
-    with getcur() as (_, cur):
+def makedb(db=None):
+    # create database if not exists
+    t = db or getdb()
+    con = basecon()
+    cur = con.cursor()
+    try:
+        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{t}`")
+        con.commit()
+    finally:
+        cur.close()
+        con.close()
+
+
+def checkcon():
+    # check if mysql is reachable
+    try:
+        makedb()
+        con = getcon()
+        con.close()
+        return True, "Connected"
+    except Exception as e:
+        return False, str(e)
+
+
+def getdbs():
+    # list all academic year databases and student counts
+    con = basecon()
+    cur = con.cursor(dictionary=True)
+    res = []
+    try:
+        cur.execute("SHOW DATABASES")
+        all_dbs = [r["Database"] for r in cur.fetchall()]
+        cand = [d for d in all_dbs if d.startswith("cbse_") or d.startswith("student_result")]
+        for d in sorted(cand):
+            try:
+                cur.execute(f"SELECT COUNT(*) AS c FROM `{d}`.students")
+                sc = cur.fetchone()["c"]
+                sch = ""
+                yr = ""
+                try:
+                    cur.execute(f"SELECT k, v FROM `{d}`.school_meta")
+                    for r in cur.fetchall():
+                        if r["k"] == "school":
+                            sch = r["v"]
+                        if r["k"] == "year":
+                            yr = r["v"]
+                except Exception:
+                    pass
+
+                if not yr and "_" in d:
+                    parts = d.split("_")
+                    if parts[-1].isdigit():
+                        yr = parts[-1]
+
+                res.append({
+                    "db": d,
+                    "year": yr or "N/A",
+                    "school": sch or "Chinmaya Vidyalaya",
+                    "studs": sc,
+                })
+            except Exception:
+                pass
+    finally:
+        cur.close()
+        con.close()
+    return res
+
+
+def initdb(db=None):
+    # create tables in target or active database
+    t = db or getdb()
+    makedb(t)
+    with getcur(db=t) as (_, cur):
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS school_meta (
@@ -117,9 +173,9 @@ def initdb():
         )
 
 
-def resetdb():
-    # clear tables for fresh data
-    with getcur() as (_, cur):
+def resetdb(db=None):
+    # clear tables for fresh data in database
+    with getcur(db=db) as (_, cur):
         cur.execute("SET FOREIGN_KEY_CHECKS = 0")
         cur.execute("TRUNCATE TABLE marks")
         cur.execute("TRUNCATE TABLE students")
@@ -131,20 +187,20 @@ def resetdb():
         cur.execute("SET FOREIGN_KEY_CHECKS = 1")
 
 
-def setschoolmeta(k, v):
+def setschoolmeta(k, v, db=None):
     # save school metadata (school name, year, class)
-    initdb()
-    with getcur() as (_, cur):
+    initdb(db=db)
+    with getcur(db=db) as (_, cur):
         cur.execute(
             "INSERT INTO school_meta (k, v) VALUES (%s, %s) ON DUPLICATE KEY UPDATE v = VALUES(v)",
             (str(k), str(v)),
         )
 
 
-def getschoolmeta(k, def_val=""):
+def getschoolmeta(k, def_val="", db=None):
     # get school metadata
     try:
-        with getcur() as (_, cur):
+        with getcur(db=db) as (_, cur):
             cur.execute("SELECT v FROM school_meta WHERE k = %s", (str(k),))
             row = cur.fetchone()
             return row["v"] if row else def_val
@@ -154,13 +210,13 @@ def getschoolmeta(k, def_val=""):
 
 # ========== INSERT / UPDATE DATA ==========
 
-def savestud(rno, nm, cls="STD XII", sec="A"):
+def savestud(rno, nm, cls="STD XII", sec="A", db=None):
     # insert student or update if already there
     rno = str(rno).strip()
     nm = str(nm).strip()
     cls = str(cls).strip() if cls else "STD XII"
     sec = str(sec).strip() if sec else "A"
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         INSERT INTO students (roll_no, name, class_name, section)
         VALUES (%s, %s, %s, %s)
@@ -170,10 +226,10 @@ def savestud(rno, nm, cls="STD XII", sec="A"):
         return cur.rowcount
 
 
-def getsubid(sn):
+def getsubid(sn, db=None):
     # get id of subject, create if new
     sn = str(sn).strip()
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         cur.execute("SELECT subject_id FROM subjects WHERE LOWER(subject_name) = LOWER(%s)", (sn,))
         row = cur.fetchone()
         if row:
@@ -182,9 +238,9 @@ def getsubid(sn):
         return int(cur.lastrowid)
 
 
-def savemark(rno, sid, got, mx=100.0):
+def savemark(rno, sid, got, mx=100.0, db=None):
     # insert or update student mark
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         INSERT INTO marks (roll_no, subject_id, marks_obtained, max_marks)
         VALUES (%s, %s, %s, %s)
@@ -194,11 +250,10 @@ def savemark(rno, sid, got, mx=100.0):
         return cur.rowcount
 
 
-def saveall(studs, marks):
+def saveall(studs, marks, db=None):
     # fast batch insert of students and marks in a single transaction
-    initdb()
-    with getcur() as (_, cur):
-        # cache subjects
+    initdb(db=db)
+    with getcur(db=db) as (_, cur):
         sub_names = list({m["sub"] for m in marks if m.get("sub")})
         sub_map = {}
         for sn in sub_names:
@@ -210,7 +265,6 @@ def saveall(studs, marks):
                 cur.execute("INSERT INTO subjects (subject_name) VALUES (%s)", (sn,))
                 sub_map[sn] = int(cur.lastrowid)
 
-        # batch students
         q_st = """
         INSERT INTO students (roll_no, name, class_name, section)
         VALUES (%s, %s, %s, %s)
@@ -220,7 +274,6 @@ def saveall(studs, marks):
         if st_rows:
             cur.executemany(q_st, st_rows)
 
-        # batch marks
         q_mk = """
         INSERT INTO marks (roll_no, subject_id, marks_obtained, max_marks)
         VALUES (%s, %s, %s, %s)
@@ -235,16 +288,16 @@ def saveall(studs, marks):
 
 # ========== DROPDOWN / LIST QUERIES ==========
 
-def getclasses():
-    # get list of classes
-    with getcur() as (_, cur):
+def getclasses(db=None):
+    # get list of classes in database
+    with getcur(db=db) as (_, cur):
         cur.execute("SELECT DISTINCT class_name FROM students ORDER BY class_name")
         return [r["class_name"] for r in cur.fetchall()]
 
 
-def getsections(cls=None):
+def getsections(cls=None, db=None):
     # get sections for a class
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         if cls:
             cur.execute("SELECT DISTINCT section FROM students WHERE class_name = %s ORDER BY section", (cls,))
         else:
@@ -252,25 +305,25 @@ def getsections(cls=None):
         return [r["section"] for r in cur.fetchall()]
 
 
-def getsubjects():
+def getsubjects(db=None):
     # get all subject names
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         cur.execute("SELECT subject_name FROM subjects ORDER BY subject_name")
         return [r["subject_name"] for r in cur.fetchall()]
 
 
-def getstuds():
+def getstuds(db=None):
     # get all students
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         cur.execute("SELECT roll_no, name, class_name, section FROM students ORDER BY roll_no")
         return cur.fetchall()
 
 
 # ========== REPORT 1: SCHOOL / CLASS TOPPERS (IMAGE 1) ==========
 
-def gettoppers(cls=None, sec=None, lim=5):
+def gettoppers(cls=None, sec=None, lim=3, db=None):
     # top ranks overall: Place, Name, Mark, %
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         SELECT
             s.roll_no, s.name, s.class_name, s.section,
@@ -310,9 +363,9 @@ def gettoppers(cls=None, sec=None, lim=5):
 
 # ========== REPORT 2: OVERALL AVERAGE & RANGE DISTRIBUTION (IMAGE 1) ==========
 
-def getsummary(cls=None, sec=None):
+def getsummary(cls=None, sec=None, db=None):
     # overall school average, distinction, 1st class, compartments and range table
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         SELECT
             s.roll_no, s.name,
@@ -409,9 +462,9 @@ def getsummary(cls=None, sec=None):
 
 # ========== REPORT 3: SUBJECT AVERAGE & STATS (IMAGE 1) ==========
 
-def getsubstats(cls=None, sec=None):
+def getsubstats(cls=None, sec=None, db=None):
     # subject name, student count, avg mark, highest mark, student count with highest, centum count, lowest
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         SELECT
             sub.subject_id,
@@ -477,9 +530,9 @@ def getsubstats(cls=None, sec=None):
 
 # ========== REPORT 4: SUBJECT TOPPERS ROSTER (IMAGE 2) ==========
 
-def getsubtoppers(cls=None, sec=None, sub=None):
+def getsubtoppers(cls=None, sec=None, sub=None, db=None):
     # subject toppers list with student names
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         WITH ranked AS (
             SELECT
@@ -525,9 +578,9 @@ def getsubtoppers(cls=None, sec=None, sub=None):
 
 # ========== MERIT LIST & FILTERS ==========
 
-def getmeritlist(cls=None, sec=None):
+def getmeritlist(cls=None, sec=None, db=None):
     # complete rank list of students
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         SELECT
             s.roll_no, s.name, s.class_name, s.section,
@@ -575,9 +628,9 @@ def getmeritlist(cls=None, sec=None):
     return res
 
 
-def getcentums(cls=None, sec=None):
+def getcentums(cls=None, sec=None, db=None):
     # students scoring 100
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         SELECT sub.subject_name, s.roll_no, s.name, s.class_name, s.section, m.marks_obtained
         FROM marks m
@@ -592,9 +645,9 @@ def getcentums(cls=None, sec=None):
         return cur.fetchall()
 
 
-def getbycategory(cat, cls=None, sec=None):
+def getbycategory(cat, cls=None, sec=None, db=None):
     # filter students by distinction / 1st class / compartment
-    all_s = getmeritlist(cls, sec)
+    all_s = getmeritlist(cls=cls, sec=sec, db=db)
     c = cat.lower()
     if c == "distinction":
         return [s for s in all_s if s["pct"] >= 75.0]
@@ -605,9 +658,9 @@ def getbycategory(cat, cls=None, sec=None):
     return all_s
 
 
-def getsubroster(sub, cls=None, sec=None, minm=None):
+def getsubroster(sub, cls=None, sec=None, minm=None, db=None):
     # list students for a specific subject
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         SELECT
             s.roll_no, s.name, s.class_name, s.section,
@@ -627,21 +680,21 @@ def getsubroster(sub, cls=None, sec=None, minm=None):
         return cur.fetchall()
 
 
-def getbyrange(minp, maxp, cls=None, sec=None):
+def getbyrange(minp, maxp, cls=None, sec=None, db=None):
     # filter students within a percentage range
-    all_s = getmeritlist(cls, sec)
+    all_s = getmeritlist(cls=cls, sec=sec, db=db)
     return [s for s in all_s if minp <= s["pct"] <= maxp]
 
 
-def getreportcard(qval):
+def getreportcard(qval, db=None):
     # get marks for one student
     qval = str(qval).strip()
-    with getcur() as (_, cur):
+    with getcur(db=db) as (_, cur):
         q = """
         SELECT
             s.roll_no, s.name, s.class_name, s.section,
             sub.subject_name, m.marks_obtained, m.max_marks
-        FROM students s
+            FROM students s
         LEFT JOIN marks m ON s.roll_no = m.roll_no
         LEFT JOIN subjects sub ON sub.subject_id = m.subject_id
         WHERE s.roll_no = %s OR LOWER(s.name) = LOWER(%s)
@@ -651,10 +704,10 @@ def getreportcard(qval):
         return cur.fetchall()
 
 
-def comparestuds(r1, r2):
+def comparestuds(r1, r2, db=None):
     # compare two students side by side
-    d1 = getreportcard(r1)
-    d2 = getreportcard(r2)
+    d1 = getreportcard(r1, db=db)
+    d2 = getreportcard(r2, db=db)
     if not d1 or not d2:
         return None
 

@@ -301,23 +301,31 @@ def parsetxt(p, def_cls="STD XII", def_sec="A"):
     }
 
 
-def savetodb(parsed):
-    # save parsed data into mysql
-    database.initdb()
-
+def savetodb(parsed, target_db=None):
+    # save parsed data into mysql database for that year
     meta = parsed.get("meta", {})
+    yr = meta.get("year", "").strip()
+
+    if not target_db:
+        if yr:
+            target_db = f"cbse_{yr}"
+        else:
+            target_db = "cbse_general"
+
+    database.initdb(db=target_db)
+
     if meta.get("school"):
-        database.setschoolmeta("school", meta["school"])
+        database.setschoolmeta("school", meta["school"], db=target_db)
     if meta.get("year"):
-        database.setschoolmeta("year", meta["year"])
+        database.setschoolmeta("year", meta["year"], db=target_db)
     if meta.get("class_name"):
-        database.setschoolmeta("class_name", meta["class_name"])
+        database.setschoolmeta("class_name", meta["class_name"], db=target_db)
 
     studs = parsed.get("studs", [])
     mks = parsed.get("marks", [])
-    s_cnt, m_cnt = database.saveall(studs, mks)
+    s_cnt, m_cnt = database.saveall(studs, mks, db=target_db)
 
-    return {"studs_saved": s_cnt, "marks_saved": m_cnt}
+    return {"db": target_db, "year": yr, "studs_saved": s_cnt, "marks_saved": m_cnt}
 
 
 def savetxt(txt, fname="report.txt"):
