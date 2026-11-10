@@ -217,3 +217,12 @@ def savetodb(parsed):
         m_cnt += 1
 
     return {"studs_saved": s_cnt, "marks_saved": m_cnt}
+
+
+def savetxt(txt, fname="report.txt"):
+    # save printable text report into reports folder
+    p = Path(__file__).resolve().parent / "reports" / fname
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(txt, encoding="utf-8")
+    return p
+

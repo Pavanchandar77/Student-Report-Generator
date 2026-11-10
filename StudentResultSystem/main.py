@@ -1,5 +1,5 @@
 # main.py - student result analysis and report generator
-# terminal mode project for ingesting text files, storing in mysql, and tabulating results
+# terminal mode project for ingesting text files, storing in mysql, tabulating, and creating text files
 
 import os
 import sys
@@ -21,6 +21,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.rule import Rule
 from rich.table import Table
+from tabulate import tabulate
 
 import database
 import file_handler
@@ -52,7 +53,7 @@ def banner():
     grid.add_column(justify="left")
     grid.add_column(justify="right")
     grid.add_row("[bold white]STUDENT RESULT ANALYSIS & REPORT SYSTEM[/bold white]", f"[{st_clr}]{st_txt}[/]")
-    grid.add_row("[dim cyan]CBSE Class XII Result Analyzer[/dim cyan]", "[dim]Python + MySQL Project[/dim]")
+    grid.add_row("[dim cyan]CBSE Class XII Result Analyzer[/dim cyan]", "[dim]Outputs Printable .txt Reports[/dim]")
 
     console.print(Panel(grid, border_style="bright_blue", box=box.ROUNDED, padding=(1, 2)))
 
@@ -146,7 +147,7 @@ def importtxt():
 
 
 def showtoppers():
-    # 2. school toppers matching image 1
+    # 2. school toppers matching image 1 -> prints table & creates text file
     console.print(Rule("[bold gold1][Toppers] School / Class Toppers[/bold gold1]", style="gold1"))
     cls_f, sec_f = getscope()
     lim = IntPrompt.ask("\nHow many ranks to show?", default=5)
@@ -169,16 +170,24 @@ def showtoppers():
     tbl.add_column("%", justify="right", style="bold bright_yellow")
 
     medals = {"I": "[1st] I", "II": "[2nd] II", "III": "[3rd] III"}
+    txt_rows = []
     for r in rows:
         pl = medals.get(r["place"], r["place"])
         tbl.add_row(pl, r["roll_no"], r["name"], f"{r['class_name']}-{r['section']}", f"{r['mark']:.0f}/{r['max_mark']:.0f}", f"{r['pct']:.2f}")
+        txt_rows.append([r["place"], r["roll_no"], r["name"], f"{r['class_name']}-{r['section']}", f"{r['mark']:.0f}/{r['max_mark']:.0f}", f"{r['pct']:.2f}%"])
 
     console.print("\n", tbl)
+
+    # create printable text file
+    txt_hdr = f"NEW SCHOOL TOPPERS - {sc_name.upper()}\n"
+    txt_table = tabulate(txt_rows, headers=["PLACE", "ROLL NO", "NAME", "CLASS-SEC", "MARK", "%"], tablefmt="grid")
+    out_file = file_handler.savetxt(f"{txt_hdr}\n{txt_table}\n", "school_toppers.txt")
+    console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
     wait()
 
 
 def showsummary():
-    # 3. overall school average and score breakdown matching image 1
+    # 3. overall school average and score breakdown matching image 1 -> prints & creates text file
     console.print(Rule("[bold magenta][Summary] Overall Average & Score Ranges[/bold magenta]", style="magenta"))
     cls_f, sec_f = getscope()
 
@@ -223,17 +232,37 @@ def showsummary():
     t2.add_column("No. of Students", justify="right", style="bold green", width=18)
     t2.add_column("Percentage", justify="right", style="bold cyan", width=16)
 
+    txt_ranges = []
     for item in s["ranges"]:
         t2.add_row(item["range"], str(item["cnt"]), f"{item['pct']:.2f} %")
+        txt_ranges.append([item["range"], item["cnt"], f"{item['pct']:.2f}%"])
     t2.add_section()
     t2.add_row("TOTAL APPEARED", str(tot), "100.00 %", style="bold bright_white")
 
     console.print(t2)
+
+    # create printable text file
+    txt_t1 = [
+        ["Total No. appeared", tot, "100.00 %"],
+        ["No. of Distinction (>= 75%)", s["dist"], f"{s['dist']/tot*100:.2f} %"],
+        ["No. of 1st Class (>= 60%, includes distinction)", s["first"], f"{s['first']/tot*100:.2f} %"],
+        ["No. of 2nd Class (50-59%)", s["second"], f"{s['second']/tot*100:.2f} %"],
+        ["No. of Compartment (< 33%)", s["comp"], f"{s['comp']/tot*100:.2f} %"],
+    ]
+    txt_out = (
+        f"OVERALL SCHOOL AVERAGE = {s['avg']:.2f} %\n\n"
+        + tabulate(txt_t1, headers=["Classification", "Count", "Percentage"], tablefmt="grid")
+        + "\n\nSCORE RANGE DISTRIBUTION BREAKDOWN:\n"
+        + tabulate(txt_ranges, headers=["Score Range", "No. of Students", "Percentage"], tablefmt="grid")
+        + f"\nTOTAL APPEARED: {tot}\n"
+    )
+    out_file = file_handler.savetxt(txt_out, "overall_summary.txt")
+    console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
     wait()
 
 
 def showsubstats():
-    # 4. subject average table matching image 1
+    # 4. subject average table matching image 1 -> prints & creates text file
     console.print(Rule("[bold cyan][Subjects] Subject Average & Centum Table[/bold cyan]", style="bright_cyan"))
     cls_f, sec_f = getscope()
 
@@ -256,22 +285,34 @@ def showsubstats():
 
     tot_c = 0
     tot_s = 0
+    txt_rows = []
     for r in rows:
         c_val = r["cent_cnt"]
         tot_c += c_val
         tot_s += r["stu_cnt"]
         c_str = f"[bold green]{c_val}[/]" if c_val > 0 else "[dim]-[/dim]"
         tbl.add_row(r["subject"], str(r["stu_cnt"]), f"{r['avg']:.2f}", f"{r['high']:.0f}", str(r["high_cnt"]), c_str, f"{r['low']:.0f}")
+        txt_rows.append([r["subject"], r["stu_cnt"], f"{r['avg']:.2f}", f"{r['high']:.0f}", r["high_cnt"], r["cent_cnt"] if r["cent_cnt"] > 0 else "-", f"{r['low']:.0f}"])
 
     tbl.add_section()
     tbl.add_row("TOTAL", str(tot_s), "-", "-", "-", f"[bold green]{tot_c} Centums[/]", "-", style="bold white")
+    txt_rows.append(["TOTAL", tot_s, "-", "-", "-", f"{tot_c} Centums", "-"])
 
     console.print("\n", tbl)
+
+    # create printable text file
+    txt_out = "SUBJECT AVERAGE & CENTUM REPORT\n" + tabulate(
+        txt_rows,
+        headers=["Subject", "No. of Students", "Subject Average", "Highest Marks", "No. of Toppers", "No. of Centum", "Lowest Marks"],
+        tablefmt="grid"
+    )
+    out_file = file_handler.savetxt(txt_out, "subject_averages.txt")
+    console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
     wait()
 
 
 def showsubtoppers():
-    # 5. subject toppers list matching image 2
+    # 5. subject toppers list matching image 2 -> prints & creates text file
     console.print(Rule("[bold gold1][Roster] Subject Toppers List[/bold gold1]", style="gold1"))
     cls_f, sec_f = getscope()
 
@@ -296,6 +337,8 @@ def showsubtoppers():
 
     console.print("\n[bold bright_white]SUBJECT TOPPERS LISTING[/bold bright_white]\n")
 
+    txt_lines = ["=================================================================", "                      SUBJECT TOPPERS", "=================================================================\n"]
+
     for g in grps:
         sn = g["subject"].upper()
         hi = g["high"]
@@ -312,17 +355,23 @@ def showsubtoppers():
         gt.add_column(style="bold white", min_width=25)
         gt.add_column(style="dim", justify="right")
 
+        txt_lines.append(f"{sn} ({hi:.0f} marks - {n_st} {suffix})")
         for idx, st in enumerate(st_list, start=1):
             gt.add_row(f"#{idx}  {st['roll_no']}", st["name"], f"Class {st['class_name']} ({st['section']})")
+            txt_lines.append(f"  #{idx}  {st['roll_no']:<10} {st['name']:<25} Class {st['class_name']} ({st['section']})")
+        txt_lines.append("")
 
         pnl = Panel(gt, title=title, title_align="left", box=box.ROUNDED, border_style="gold1" if hi >= 100 else "cyan")
         console.print(pnl)
 
+    # create printable text file
+    out_file = file_handler.savetxt("\n".join(txt_lines), "subject_toppers.txt")
+    console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
     wait()
 
 
 def showmeritlist():
-    # 6. full ranked merit list
+    # 6. full ranked merit list -> prints & creates text file
     console.print(Rule("[bold blue][Merit] Full Ranked Merit List[/bold blue]", style="blue"))
     cls_f, sec_f = getscope()
 
@@ -343,17 +392,28 @@ def showmeritlist():
     tbl.add_column("%", justify="right", style="bold bright_yellow")
     tbl.add_column("STATUS", justify="center")
 
+    txt_rows = []
     for r in rows:
         st = r["status"]
         st_clr = "bold green" if st == "Distinction" else ("green" if st == "1st Class" else ("yellow" if st == "2nd Class" else ("bold red" if st == "Compartment" else "cyan")))
         tbl.add_row(str(r["rank"]), r["roll_no"], r["name"], f"{r['class_name']}-{r['section']}", f"{r['tot_got']:.0f}/{r['tot_max']:.0f}", f"{r['pct']:.2f}", f"[{st_clr}]{st}[/]")
+        txt_rows.append([r["rank"], r["roll_no"], r["name"], f"{r['class_name']}-{r['section']}", f"{r['tot_got']:.0f}/{r['tot_max']:.0f}", f"{r['pct']:.2f}%", st])
 
     console.print("\n", tbl)
+
+    # create printable text file
+    txt_out = f"FULL MERIT LIST ({len(rows)} Students)\n" + tabulate(
+        txt_rows,
+        headers=["RANK", "ROLL NO", "NAME", "CLASS-SEC", "TOTAL", "%", "STATUS"],
+        tablefmt="grid"
+    )
+    out_file = file_handler.savetxt(txt_out, "merit_list.txt")
+    console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
     wait()
 
 
 def showfilters():
-    # 7. filter menu (centum, distinction, 1st class, compartment, subject cut-off, range)
+    # 7. filter menu (centum, distinction, 1st class, compartment, subject cut-off, range) -> prints & creates text file
     console.print(Rule("[bold bright_magenta][Filters] Advanced Student Filters[/bold bright_magenta]", style="bright_magenta"))
     console.print("  [bold yellow]1.[/bold yellow] [Centum Club] - Students who scored 100 in any subject")
     console.print("  [bold yellow]2.[/bold yellow] [Distinction] - Overall Percentage >= 75%")
@@ -381,9 +441,14 @@ def showfilters():
             tbl.add_column("NAME", style="bold white", min_width=22)
             tbl.add_column("CLASS-SEC", style="dim", justify="center")
             tbl.add_column("MARKS", style="bold bright_green", justify="right")
+            txt_rows = []
             for r in rows:
                 tbl.add_row(r["subject_name"], r["roll_no"], r["name"], f"{r['class_name']}-{r['section']}", f"{r['marks_obtained']:.0f}/100")
+                txt_rows.append([r["subject_name"], r["roll_no"], r["name"], f"{r['class_name']}-{r['section']}", f"{r['marks_obtained']:.0f}/100"])
             console.print("\n", tbl)
+            txt_out = f"PERFECT CENTUM SCORERS (100 MARKS)\n" + tabulate(txt_rows, headers=["SUBJECT", "ROLL NO", "NAME", "CLASS-SEC", "MARKS"], tablefmt="grid")
+            out_file = file_handler.savetxt(txt_out, "filtered_centums.txt")
+            console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
 
     elif fch in ("2", "3", "4"):
         cmap = {"2": "distinction", "3": "1st", "4": "compartment"}
@@ -400,9 +465,14 @@ def showfilters():
             tbl.add_column("TOTAL", justify="right", style="green")
             tbl.add_column("PERCENTAGE", justify="right", style="bold bright_yellow")
             tbl.add_column("STATUS", justify="center", style="bold")
+            txt_rows = []
             for r in rows:
                 tbl.add_row(str(r["rank"]), r["roll_no"], r["name"], f"{r['tot_got']:.0f}/{r['tot_max']:.0f}", f"{r['pct']:.2f}%", r["status"])
+                txt_rows.append([r["rank"], r["roll_no"], r["name"], f"{r['tot_got']:.0f}/{r['tot_max']:.0f}", f"{r['pct']:.2f}%", r["status"]])
             console.print("\n", tbl)
+            txt_out = f"FILTERED STUDENTS: {cat.upper()}\n" + tabulate(txt_rows, headers=["RANK", "ROLL NO", "NAME", "TOTAL", "PERCENTAGE", "STATUS"], tablefmt="grid")
+            out_file = file_handler.savetxt(txt_out, f"filtered_{cat}.txt")
+            console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
 
     elif fch == "5":
         subs = database.getsubjects()
@@ -429,9 +499,14 @@ def showfilters():
             tbl.add_column("NAME", style="bold white", min_width=24)
             tbl.add_column("MARKS", justify="right", style="bold green")
             tbl.add_column("PERCENTAGE", justify="right", style="cyan")
+            txt_rows = []
             for r in rows:
                 tbl.add_row(str(r["rk"]), r["roll_no"], r["name"], f"{r['marks_obtained']:.0f}/{r['max_marks']:.0f}", f"{r['pct']:.2f}%")
+                txt_rows.append([r["rk"], r["roll_no"], r["name"], f"{r['marks_obtained']:.0f}/{r['max_marks']:.0f}", f"{r['pct']:.2f}%"])
             console.print("\n", tbl)
+            txt_out = f"SUBJECT ROSTER: {sub_n.upper()}\n" + tabulate(txt_rows, headers=["RANK", "ROLL NO", "NAME", "MARKS", "PERCENTAGE"], tablefmt="grid")
+            out_file = file_handler.savetxt(txt_out, f"subject_roster_{sub_n.lower().replace(' ', '_')}.txt")
+            console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
 
     elif fch == "6":
         p1 = float(Prompt.ask("Minimum Percentage (e.g. 80.0)", default="80.0"))
@@ -448,15 +523,20 @@ def showfilters():
             tbl.add_column("TOTAL", justify="right", style="green")
             tbl.add_column("PERCENTAGE", justify="right", style="bold bright_yellow")
             tbl.add_column("STATUS", justify="center", style="bold")
+            txt_rows = []
             for r in rows:
                 tbl.add_row(str(r["rank"]), r["roll_no"], r["name"], f"{r['tot_got']:.0f}/{r['tot_max']:.0f}", f"{r['pct']:.2f}%", r["status"])
+                txt_rows.append([r["rank"], r["roll_no"], r["name"], f"{r['tot_got']:.0f}/{r['tot_max']:.0f}", f"{r['pct']:.2f}%", r["status"]])
             console.print("\n", tbl)
+            txt_out = f"STUDENTS IN RANGE [{p1}% - {p2}%]\n" + tabulate(txt_rows, headers=["RANK", "ROLL NO", "NAME", "TOTAL", "PERCENTAGE", "STATUS"], tablefmt="grid")
+            out_file = file_handler.savetxt(txt_out, "filtered_range.txt")
+            console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
 
     wait()
 
 
 def showreportcard():
-    # 8. student individual report card
+    # 8. student individual report card -> prints & creates text file
     console.print(Rule("[bold cyan][Report] Individual Student Report Card[/bold cyan]", style="bright_cyan"))
     q = Prompt.ask("Enter Roll No or Student Name").strip()
     if not q:
@@ -481,6 +561,7 @@ def showreportcard():
     tbl.add_column("%", justify="right", style="bold yellow", width=10)
     tbl.add_column("Grade", justify="center", style="bold", width=10)
 
+    txt_rows = []
     for r in rows:
         if not r.get("subject_name"):
             continue
@@ -489,23 +570,34 @@ def showreportcard():
         tot_g += g
         tot_m += x
         p = round(g / x * 100, 2) if x > 0 else 0.0
-        grd = "[green]A1[/]" if p >= 90 else ("[green]A2[/]" if p >= 80 else ("[cyan]B1[/]" if p >= 70 else ("[cyan]B2[/]" if p >= 60 else ("[yellow]C[/]" if p >= 50 else ("[yellow]D[/]" if p >= 33 else "[bold red]E (Fail)[/]")))))
-        tbl.add_row(r["subject_name"], f"{g:.0f}", f"{x:.0f}", f"{p:.2f}%", grd)
+        grd = "A1" if p >= 90 else ("A2" if p >= 80 else ("B1" if p >= 70 else ("B2" if p >= 60 else ("C" if p >= 50 else ("D" if p >= 33 else "E (Fail)")))))
+        tbl.add_row(r["subject_name"], f"{g:.0f}", f"{x:.0f}", f"{p:.2f}%", f"[green]{grd}[/]" if "A" in grd or "B" in grd else grd)
+        txt_rows.append([r["subject_name"], f"{g:.0f}", f"{x:.0f}", f"{p:.2f}%", grd])
 
     tot_p = round(tot_g / tot_m * 100, 2) if tot_m > 0 else 0.0
-    status = "[bold green]PASS (DISTINCTION)[/]" if tot_p >= 75 else ("[bold green]PASS (1st CLASS)[/]" if tot_p >= 60 else ("[bold yellow]PASS (2nd CLASS)[/]" if tot_p >= 50 else ("[bold red]COMPARTMENT[/]" if tot_p < 33 else "[cyan]PASS[/]")))
+    status = "PASS (DISTINCTION)" if tot_p >= 75 else ("PASS (1st CLASS)" if tot_p >= 60 else ("PASS (2nd CLASS)" if tot_p >= 50 else ("COMPARTMENT" if tot_p < 33 else "PASS")))
 
     tbl.add_section()
-    tbl.add_row("GRAND TOTAL", f"[bold green]{tot_g:.0f}[/]", f"[bold cyan]{tot_m:.0f}[/]", f"[bold bright_yellow]{tot_p:.2f}%[/]", status)
+    tbl.add_row("GRAND TOTAL", f"[bold green]{tot_g:.0f}[/]", f"[bold cyan]{tot_m:.0f}[/]", f"[bold bright_yellow]{tot_p:.2f}%[/]", f"[bold green]{status}[/]")
+    txt_rows.append(["GRAND TOTAL", f"{tot_g:.0f}", f"{tot_m:.0f}", f"{tot_p:.2f}%", status])
 
     hdr = f"[bold white]{st['name'].upper()}[/bold white]\nRoll No: [bold cyan]{st['roll_no']}[/bold cyan]   |   Class: [bold]{st['class_name']}[/bold]   |   Section: [bold]{st['section']}[/bold]"
     console.print(Panel(hdr, box=box.ROUNDED, border_style="cyan"))
     console.print(tbl)
+
+    # create printable text file
+    txt_hdr = (
+        f"STUDENT REPORT CARD\n"
+        f"Name: {st['name']}   |   Roll No: {st['roll_no']}   |   Class: {st['class_name']} ({st['section']})\n"
+    )
+    txt_out = txt_hdr + "\n" + tabulate(txt_rows, headers=["Subject", "Marks", "Max", "%", "Grade"], tablefmt="grid")
+    out_file = file_handler.savetxt(txt_out, f"report_card_{st['roll_no']}.txt")
+    console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
     wait()
 
 
 def comparetwo():
-    # 9. compare two students
+    # 9. compare two students -> prints & creates text file
     console.print(Rule("[bold magenta][Compare] Side-by-Side Comparison[/bold magenta]", style="magenta"))
     r1 = Prompt.ask("Enter Roll No for Student 1").strip()
     r2 = Prompt.ask("Enter Roll No for Student 2").strip()
@@ -536,11 +628,13 @@ def comparetwo():
     tbl.add_column("Diff", justify="right", style="yellow", width=12)
     tbl.add_column("Leader", justify="center", style="bold green", width=18)
 
+    txt_rows = []
     for itm in cmp_res["subs"]:
         d_str = f"+{itm['diff']:.0f}" if itm["diff"] > 0 else f"{itm['diff']:.0f}"
         v1_str = f"{itm['v1']:.0f}" if itm["v1"] is not None else "-"
         v2_str = f"{itm['v2']:.0f}" if itm["v2"] is not None else "-"
         tbl.add_row(itm["sub"], v1_str, v2_str, d_str, itm["leader"])
+        txt_rows.append([itm["sub"], v1_str, v2_str, d_str, itm["leader"]])
 
     tbl.add_section()
     tbl.add_row(
@@ -551,13 +645,115 @@ def comparetwo():
         f"[bold bright_green]{cmp_res['leader']}[/]",
         style="bold white",
     )
+    txt_rows.append(["TOTAL", f"{s1['tot']:.0f} ({s1['pct']:.2f}%)", f"{s2['tot']:.0f} ({s2['pct']:.2f}%)", f"{cmp_res['diff_pct']:.2f}%", cmp_res["leader"]])
 
     console.print("\n", tbl)
+
+    # create printable text file
+    txt_hdr = f"COMPARISON: {s1['name']} ({s1['roll_no']}) vs {s2['name']} ({s2['roll_no']})\nLeader: {cmp_res['leader']} (Margin: {cmp_res['diff_pct']}%)\n"
+    txt_out = txt_hdr + "\n" + tabulate(
+        txt_rows,
+        headers=["Subject", f"{s1['name']} ({s1['roll_no']})", f"{s2['name']} ({s2['roll_no']})", "Diff", "Leader"],
+        tablefmt="grid"
+    )
+    out_file = file_handler.savetxt(txt_out, f"comparison_{s1['roll_no']}_vs_{s2['roll_no']}.txt")
+    console.print(f"\n[bold green][OK] Created output text file:[/bold green] [cyan]{out_file}[/cyan]")
+    wait()
+
+
+def makefullsheet():
+    # 10. create complete 2-page CBSE printable analysis sheet matching Image 1 + Image 2
+    console.print(Rule("[bold bright_green][Full Sheet] Generate Complete Result Analysis Sheet (.txt)[/bold bright_green]", style="bright_green"))
+    cls_f, sec_f = getscope()
+
+    with console.status("[cyan]Generating complete school analysis document...[/cyan]"):
+        toppers = database.gettoppers(cls=cls_f, sec=sec_f, lim=10)
+        summary = database.getsummary(cls=cls_f, sec=sec_f)
+        sub_stats = database.getsubstats(cls=cls_f, sec=sec_f)
+        sub_toppers = database.getsubtoppers(cls=cls_f, sec=sec_f)
+
+    tot = summary["total"]
+    if tot == 0:
+        console.print("[yellow]No data found.[/yellow]")
+        wait()
+        return
+
+    # build complete document
+    lines = [
+        "Hari Om",
+        "Chinmaya Vidyalaya, Anna Nagar, Chennai - 600 040.",
+        "CBSE EXAM STD - XII RESULT ANALYSIS (2025-26)",
+        "=" * 82,
+        "",
+        "NEW SCHOOL TOPPERS",
+        "-" * 82,
+    ]
+
+    # toppers table
+    t_rows = [[r["place"], r["name"], f"{r['mark']:.0f}", f"{r['pct']:.2f}"] for r in toppers]
+    lines.append(tabulate(t_rows, headers=["PLACE", "NAME", "MARK", "%"], tablefmt="grid"))
+    lines.append("")
+
+    # overall average and summary table
+    lines.append(f"OVERALL SCHOOL AVERAGE = {summary['avg']:.2f} %\n")
+    s_rows = [
+        ["Total No. appeared", tot],
+        ["No. of Distinction", summary["dist"]],
+        ["No. of 1st Class (includes distinction)", summary["first"]],
+        ["No. of 2nd Class", summary["second"] if summary["second"] > 0 else "-"],
+        ["No. of Compartment", summary["comp"] if summary["comp"] > 0 else "Nil"],
+    ]
+    lines.append(tabulate(s_rows, headers=["Metric", "Count"], tablefmt="grid"))
+    lines.append("")
+
+    # score range distribution
+    lines.append("SCORE RANGE DISTRIBUTION:")
+    r_rows = [[it["range"], it["cnt"]] for it in summary["ranges"]]
+    r_rows.append(["TOTAL", tot])
+    lines.append(tabulate(r_rows, headers=["Score Range", "No. of Students"], tablefmt="grid"))
+    lines.append("")
+
+    # subject average table
+    lines.append("SUBJECT AVERAGE")
+    lines.append("-" * 82)
+    sub_rows = [
+        [s["subject"], s["stu_cnt"], f"{s['avg']:.2f}", f"{s['high']:.0f}", s["high_cnt"], s["cent_cnt"] if s["cent_cnt"] > 0 else "-"]
+        for s in sub_stats
+    ]
+    lines.append(tabulate(sub_rows, headers=["Subject", "No. of Students", "Subject Average", "Highest marks", "No. of Students", "No. of Centum"], tablefmt="grid"))
+    lines.append("")
+
+    # subject toppers roster (Page 2)
+    lines.append("=" * 82)
+    lines.append("SUBJECT TOPPERS")
+    lines.append("=" * 82)
+    for g in sub_toppers:
+        hi = g["high"]
+        st_list = g["students"]
+        n_st = len(st_list)
+        suffix = "student" if n_st == 1 else "students"
+        lines.append(f"\n{g['subject'].upper()} ({hi:.0f} marks - {n_st} {suffix})")
+        lines.append("-" * 40)
+        for st in st_list:
+            lines.append(f"  {st['name']}")
+
+    full_doc = "\n".join(lines)
+    out_file = file_handler.savetxt(full_doc, "complete_cbse_result_analysis.txt")
+
+    pnl = Panel(
+        f"[bold green][OK] Complete CBSE Result Analysis Sheet Generated![/bold green]\n\n"
+        f"- Target file: [bold cyan]{out_file}[/bold cyan]\n"
+        f"- Ready for printing: contains School Toppers, Overall Summary, Subject Average Table, and Subject Toppers.\n"
+        f"- Format: Clean text grid tables (Ctrl + P in Notepad).",
+        box=box.ROUNDED,
+        border_style="green",
+    )
+    console.print(pnl)
     wait()
 
 
 def dbtools():
-    # 10. database count and reset
+    # 11. database count and reset
     console.print(Rule("[bold yellow][Database] Database Status & Reset[/bold yellow]", style="yellow"))
     studs = database.getstuds()
     subs = database.getsubjects()
@@ -591,15 +787,16 @@ def main():
 
     menu_items = [
         ("1", "[Ingest] Input Text File (.txt)", "Parse text file and save into MySQL DB"),
-        ("2", "[Toppers] School / Class Toppers", "Place I, II, III... Mark & % [Image 1]"),
-        ("3", "[Summary] Overall Average & Ranges", "Average %, Distinction, Range bins [Image 1]"),
-        ("4", "[Subjects] Subject Average & Stats", "Avg, Highest, Count, Centums [Image 1]"),
-        ("5", "[Roster] Subject Toppers List", "Highest score per subject & student names [Image 2]"),
-        ("6", "[Merit] Full Ranked Merit List", "Complete rank roster with total and %"),
-        ("7", "[Filter] Advanced Student Filters", "Filter by Centum, Distinction, Subject, Range"),
-        ("8", "[Report] Individual Report Card", "Lookup student marks by Roll No or Name"),
-        ("9", "[Compare] Side-by-Side Comparison", "Compare two students head to head"),
-        ("10", "[Database] Status & Reset", "View table counts or wipe database"),
+        ("2", "[Toppers] School / Class Toppers", "Place I, II, III... Mark & % [Creates .txt]"),
+        ("3", "[Summary] Overall Average & Ranges", "Average %, Distinction, Range bins [Creates .txt]"),
+        ("4", "[Subjects] Subject Average & Stats", "Avg, Highest, Count, Centums [Creates .txt]"),
+        ("5", "[Roster] Subject Toppers List", "Highest score per subject & student names [Creates .txt]"),
+        ("6", "[Merit] Full Ranked Merit List", "Complete rank roster with total and % [Creates .txt]"),
+        ("7", "[Filter] Advanced Student Filters", "Filter by Centum, Distinction, Subject [Creates .txt]"),
+        ("8", "[Report] Individual Report Card", "Lookup student marks by Roll No or Name [Creates .txt]"),
+        ("9", "[Compare] Side-by-Side Comparison", "Compare two students head to head [Creates .txt]"),
+        ("10", "[Full Sheet] Generate Master Print Sheet", "Combine all reports into official printable .txt"),
+        ("11", "[Database] Status & Reset", "View table counts or wipe database"),
         ("0", "[Exit] Quit", "Close program"),
     ]
 
@@ -618,7 +815,7 @@ def main():
         pnl = Panel(tbl, title="[bold white]MAIN MENU[/bold white]", border_style="bright_blue", box=box.ROUNDED, padding=(1, 2))
         console.print(pnl)
 
-        ch = Prompt.ask("\n[bold cyan]Choose option[/bold cyan]", choices=[str(i) for i in range(11)], default="1")
+        ch = Prompt.ask("\n[bold cyan]Choose option[/bold cyan]", choices=[str(i) for i in range(12)], default="1")
 
         try:
             if ch == "1":
@@ -640,6 +837,8 @@ def main():
             elif ch == "9":
                 comparetwo()
             elif ch == "10":
+                makefullsheet()
+            elif ch == "11":
                 dbtools()
             elif ch == "0":
                 console.print("\n[bold green]Goodbye! Study well![/bold green]\n")
