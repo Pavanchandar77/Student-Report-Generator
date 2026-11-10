@@ -1,0 +1,32 @@
+Roll No: 12001
+Name: RIYA ANAND
+Class: STD XII
+Section: A
+Marks:
+  English: 99
+  Math: 99
+  Chemistry: 98
+  Economics: 98
+  Political Science: 100
+---
+Roll No: 12002
+Name: AKSHAY S BABU
+Class: STD XII
+Section: C
+Marks:
+  English: 97
+  Economics: 98
+  History: 99
+  Political Science: 100
+  Sociology: 99
+---
+Roll No: 12003
+Name: MAHATHI J M
+Class: STD XII
+Section: C
+Marks:
+  English: 97
+  Economics: 96
+  History: 99
+  Political Science: 100
+  Psychology: 100

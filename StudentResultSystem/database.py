@@ -1,15 +1,12 @@
-# database.py - handles all mysql database stuff
-# this file connects to mysql and does all the table work
-# run initdb() first before doing anything else
+# database.py - mysql database operations for student result system
+# handles connecting, saving data from text file, and running queries for reports
 
 import os
 from contextlib import contextmanager
-
 import mysql.connector
 from mysql.connector import Error
 
-
-# connection details - change password if urs is different
+# mysql connection details
 DBCONF = {
     "host": os.environ.get("MYSQL_HOST", "localhost"),
     "user": os.environ.get("MYSQL_USER", "root"),
@@ -19,60 +16,48 @@ DBCONF = {
 }
 
 
-def basecon(cfg=None):
-    # connect without picking a database (needed to create db)
+def basecon():
+    # connect without database to create it if not exists
     c = DBCONF.copy()
-    if cfg:
-        c.update(cfg)
     c.pop("database", None)
     return mysql.connector.connect(**c)
 
 
-def makedb(cfg=None):
-    # create the database if it doesnt exist yet
-    c = DBCONF.copy()
-    if cfg:
-        c.update(cfg)
-    db = c.get("database", "student_result_system")
-
-    con = basecon(c)
+def makedb():
+    # create database if not there
+    db = DBCONF.get("database", "student_result_system")
+    con = basecon()
     cur = con.cursor()
     try:
-        cur.execute(
-            f"CREATE DATABASE IF NOT EXISTS `{db}` "
-            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-        )
+        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}`")
         con.commit()
     finally:
         cur.close()
         con.close()
 
 
-def checkcon(cfg=None):
-    # check if mysql is running and we can connect
+def checkcon():
+    # check if mysql is connected
     try:
-        makedb(cfg)
-        con = getcon(cfg)
+        makedb()
+        con = getcon()
         con.close()
-        return True, "Connected to MySQL database."
+        return True, "Connected"
     except Error as e:
-        return False, f"MySQL Error: {e.msg}"
+        return False, str(e.msg)
     except Exception as e:
-        return False, f"Connection Error: {e}"
+        return False, str(e)
 
 
-def getcon(cfg=None):
-    # get a mysql connection
-    c = DBCONF.copy()
-    if cfg:
-        c.update(cfg)
-    return mysql.connector.connect(**c)
+def getcon():
+    # get connection to mysql
+    return mysql.connector.connect(**DBCONF)
 
 
 @contextmanager
-def getcur(cfg=None):
-    # gives u a cursor, auto commits when done, rollback if error
-    con = getcon(cfg)
+def getcur():
+    # cursor context manager with auto commit
+    con = getcon()
     cur = con.cursor(dictionary=True)
     try:
         yield con, cur
@@ -85,26 +70,21 @@ def getcur(cfg=None):
         con.close()
 
 
-def initdb(cfg=None):
-    # creates all three tables - run this first before anything
-    makedb(cfg)
-
-    with getcur(cfg) as (_, cur):
-        # students table - stores student info
+def initdb():
+    # create students, subjects and marks tables
+    makedb()
+    with getcur() as (_, cur):
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS students (
                 student_id INT AUTO_INCREMENT PRIMARY KEY,
-                roll_no VARCHAR(20) NOT NULL UNIQUE,
-                name VARCHAR(100) NOT NULL,
-                class_name VARCHAR(50) NOT NULL,
-                section VARCHAR(10) NOT NULL,
-                phone VARCHAR(20),
-                email VARCHAR(100)
+                roll_no VARCHAR(50) NOT NULL UNIQUE,
+                name VARCHAR(150) NOT NULL,
+                class_name VARCHAR(50) NOT NULL DEFAULT 'STD XII',
+                section VARCHAR(20) NOT NULL DEFAULT 'A'
             )
             """
         )
-        # subjects table - maths physics chemistry etc
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS subjects (
@@ -113,410 +93,527 @@ def initdb(cfg=None):
             )
             """
         )
-        # marks table - stores who got how much in what
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS marks (
                 mark_id INT AUTO_INCREMENT PRIMARY KEY,
-                roll_no VARCHAR(20) NOT NULL,
+                roll_no VARCHAR(50) NOT NULL,
                 subject_id INT NOT NULL,
-                marks_obtained DECIMAL(5,2) NOT NULL,
-                max_marks DECIMAL(5,2) NOT NULL,
+                marks_obtained DECIMAL(6,2) NOT NULL,
+                max_marks DECIMAL(6,2) NOT NULL DEFAULT 100.00,
                 UNIQUE KEY uq_roll_sub (roll_no, subject_id),
-                FOREIGN KEY (roll_no) REFERENCES students(roll_no)
-                    ON DELETE CASCADE,
-                FOREIGN KEY (subject_id) REFERENCES subjects(subject_id)
-                    ON DELETE CASCADE
+                FOREIGN KEY (roll_no) REFERENCES students(roll_no) ON DELETE CASCADE,
+                FOREIGN KEY (subject_id) REFERENCES subjects(subject_id) ON DELETE CASCADE
             )
             """
         )
 
 
-# ========== STUDENT FUNCTIONS ==========
-# CRUD = Create Read Update Delete
-# basically add, see, change, remove students
-
-def addstud(rno, nm, cls, sec, ph=None, em=None, cfg=None):
-    # add one new student
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            "INSERT INTO students (roll_no, name, class_name, section, phone, email) VALUES (%s, %s, %s, %s, %s, %s)",
-            (rno, nm, cls, sec, ph, em),
-        )
-        return int(cur.lastrowid)
+def resetdb():
+    # clear tables for fresh data
+    with getcur() as (_, cur):
+        cur.execute("SET FOREIGN_KEY_CHECKS = 0")
+        cur.execute("TRUNCATE TABLE marks")
+        cur.execute("TRUNCATE TABLE students")
+        cur.execute("TRUNCATE TABLE subjects")
+        cur.execute("SET FOREIGN_KEY_CHECKS = 1")
 
 
-def upsertstud(rno, nm, cls, sec, ph=None, em=None, cfg=None):
-    # if student exists update, else insert new one
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            INSERT INTO students (roll_no, name, class_name, section, phone, email)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                name = VALUES(name),
-                class_name = VALUES(class_name),
-                section = VALUES(section),
-                phone = COALESCE(VALUES(phone), phone),
-                email = COALESCE(VALUES(email), email)
-            """,
-            (rno, nm, cls, sec, ph, em),
-        )
+# ========== INSERT / UPDATE DATA ==========
+
+def savestud(rno, nm, cls="STD XII", sec="A"):
+    # insert student or update if already there
+    rno = str(rno).strip()
+    nm = str(nm).strip()
+    cls = str(cls).strip() if cls else "STD XII"
+    sec = str(sec).strip() if sec else "A"
+    with getcur() as (_, cur):
+        q = """
+        INSERT INTO students (roll_no, name, class_name, section)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE name = VALUES(name), class_name = VALUES(class_name), section = VALUES(section)
+        """
+        cur.execute(q, (rno, nm, cls, sec))
         return cur.rowcount
 
 
-def updatestud(rno, nm, cls, sec, ph=None, em=None, cfg=None):
-    # update an existing student's info
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            UPDATE students
-            SET name = %s, class_name = %s, section = %s, phone = %s, email = %s
-            WHERE roll_no = %s
-            """,
-            (nm, cls, sec, ph, em, rno),
-        )
-        return cur.rowcount
-
-
-def delstud(rno, cfg=None):
-    # delete a student by roll number
-    with getcur(cfg) as (_, cur):
-        cur.execute("DELETE FROM students WHERE roll_no = %s", (rno,))
-        return cur.rowcount
-
-
-def searchstud(kw, cfg=None):
-    # search students by any keyword (name, roll, class, section)
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            SELECT s.roll_no, s.name, s.class_name, s.section, s.phone, s.email
-            FROM students s
-            WHERE s.roll_no LIKE %s OR s.name LIKE %s OR s.class_name LIKE %s OR s.section LIKE %s
-            ORDER BY s.roll_no
-            """,
-            (tuple(f"%{kw}%" for _ in range(4))),
-        )
-        return cur.fetchall()
-
-
-def fetchstuds(cfg=None):
-    # get all students from database
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            SELECT roll_no, name, class_name, section, phone, email
-            FROM students
-            ORDER BY roll_no
-            """
-        )
-        return cur.fetchall()
-
-
-# ========== SUBJECT FUNCTIONS ==========
-
-def addsub(subname, cfg=None):
-    # add one subject
-    with getcur(cfg) as (_, cur):
-        cur.execute("INSERT INTO subjects (subject_name) VALUES (%s)", (subname,))
-        return int(cur.lastrowid)
-
-
-def getorcreatesub(subname, cfg=None):
-    # get subject id, or create it if it doesnt exist
-    clean = str(subname).strip()
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            "SELECT subject_id FROM subjects WHERE LOWER(subject_name) = LOWER(%s)",
-            (clean,),
-        )
+def getsubid(sn):
+    # get id of subject, create if new
+    sn = str(sn).strip()
+    with getcur() as (_, cur):
+        cur.execute("SELECT subject_id FROM subjects WHERE LOWER(subject_name) = LOWER(%s)", (sn,))
         row = cur.fetchone()
         if row:
             return int(row["subject_id"])
-        cur.execute("INSERT INTO subjects (subject_name) VALUES (%s)", (clean,))
+        cur.execute("INSERT INTO subjects (subject_name) VALUES (%s)", (sn,))
         return int(cur.lastrowid)
 
 
-def fetchsubs(cfg=None):
-    # get all subjects
-    with getcur(cfg) as (_, cur):
-        cur.execute("SELECT subject_id, subject_name FROM subjects ORDER BY subject_name")
-        return cur.fetchall()
-
-
-# ========== MARKS FUNCTIONS ==========
-
-def addmark(rno, subid, got, mx, cfg=None):
-    # add one mark entry
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            "INSERT INTO marks (roll_no, subject_id, marks_obtained, max_marks) VALUES (%s, %s, %s, %s)",
-            (rno, subid, got, mx),
-        )
-        return int(cur.lastrowid)
-
-
-def upsertmark(rno, subid, got, mx, cfg=None):
-    # insert mark or update if already exists
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            INSERT INTO marks (roll_no, subject_id, marks_obtained, max_marks)
-            VALUES (%s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                marks_obtained = VALUES(marks_obtained),
-                max_marks = VALUES(max_marks)
-            """,
-            (rno, subid, got, mx),
-        )
+def savemark(rno, sid, got, mx=100.0):
+    # insert or update student mark
+    with getcur() as (_, cur):
+        q = """
+        INSERT INTO marks (roll_no, subject_id, marks_obtained, max_marks)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE marks_obtained = VALUES(marks_obtained), max_marks = VALUES(max_marks)
+        """
+        cur.execute(q, (str(rno).strip(), sid, float(got), float(mx)))
         return cur.rowcount
 
 
-def fetchallmarks(cfg=None):
-    # get all marks joined with student and subject names
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            SELECT
-                m.mark_id, s.roll_no, s.name, s.class_name,
-                sub.subject_name, m.marks_obtained, m.max_marks
-            FROM marks m
-            JOIN students s ON s.roll_no = m.roll_no
-            JOIN subjects sub ON sub.subject_id = m.subject_id
-            ORDER BY s.roll_no, sub.subject_name
-            """
-        )
+# ========== DROPDOWN / LIST QUERIES ==========
+
+def getclasses():
+    # get list of classes
+    with getcur() as (_, cur):
+        cur.execute("SELECT DISTINCT class_name FROM students ORDER BY class_name")
+        return [r["class_name"] for r in cur.fetchall()]
+
+
+def getsections(cls=None):
+    # get sections for a class
+    with getcur() as (_, cur):
+        if cls:
+            cur.execute("SELECT DISTINCT section FROM students WHERE class_name = %s ORDER BY section", (cls,))
+        else:
+            cur.execute("SELECT DISTINCT section FROM students ORDER BY section")
+        return [r["section"] for r in cur.fetchall()]
+
+
+def getsubjects():
+    # get all subject names
+    with getcur() as (_, cur):
+        cur.execute("SELECT subject_name FROM subjects ORDER BY subject_name")
+        return [r["subject_name"] for r in cur.fetchall()]
+
+
+def getstuds():
+    # get all students
+    with getcur() as (_, cur):
+        cur.execute("SELECT roll_no, name, class_name, section FROM students ORDER BY roll_no")
         return cur.fetchall()
 
 
-# ========== RESULTS & REPORTS ==========
+# ========== REPORT 1: SCHOOL / CLASS TOPPERS (IMAGE 1) ==========
 
-def fetchclassresults(cls, cfg=None):
-    # get all results for one class
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            SELECT
-                s.roll_no, s.name, s.class_name, s.section,
-                sub.subject_name, m.marks_obtained, m.max_marks
-            FROM students s
-            JOIN marks m ON s.roll_no = m.roll_no
-            JOIN subjects sub ON sub.subject_id = m.subject_id
-            WHERE s.class_name = %s
-            ORDER BY s.roll_no, sub.subject_name
-            """,
-            (cls,),
-        )
-        return cur.fetchall()
-
-
-def fetchreport(rno, cfg=None):
-    # get one student's full report card data
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            SELECT
-                s.roll_no, s.name, s.class_name, s.section,
-                s.phone, s.email,
-                sub.subject_name, m.marks_obtained, m.max_marks
-            FROM students s
-            LEFT JOIN marks m ON s.roll_no = m.roll_no
-            LEFT JOIN subjects sub ON sub.subject_id = m.subject_id
-            WHERE s.roll_no = %s
-            ORDER BY sub.subject_name
-            """,
-            (rno,),
-        )
-        return cur.fetchall()
-
-
-def getranked(cls, cfg=None):
-    # get ranked results for a class (1st, 2nd, 3rd etc)
-    with getcur(cfg) as (_, cur):
-        cur.execute(
-            """
-            SELECT
-                s.roll_no, s.name, s.class_name,
-                ROUND(SUM(m.marks_obtained), 2) AS total,
-                ROUND(SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) * 100, 2) AS percentage,
-                ROW_NUMBER() OVER (
-                    ORDER BY SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) DESC, s.roll_no
-                ) AS rank_position
-            FROM students s
-            JOIN marks m ON s.roll_no = m.roll_no
-            WHERE s.class_name = %s
-            GROUP BY s.roll_no, s.name, s.class_name
-            ORDER BY rank_position
-            """,
-            (cls,),
-        )
-        return cur.fetchall()
-
-
-# ========== ANALYTICS - WHO SCORED MOST ==========
-
-def gettopscorers(cls=None, lim=10, cfg=None):
-    # find who scored the most marks overall
-    with getcur(cfg) as (_, cur):
+def gettoppers(cls=None, sec=None, lim=5):
+    # top ranks overall: Place, Name, Mark, %
+    with getcur() as (_, cur):
         q = """
         SELECT
             s.roll_no, s.name, s.class_name, s.section,
-            ROUND(SUM(m.marks_obtained), 2) AS total_obtained,
-            ROUND(SUM(m.max_marks), 2) AS total_max,
-            ROUND(SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) * 100, 2) AS percentage,
-            DENSE_RANK() OVER (
-                ORDER BY SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) DESC, SUM(m.marks_obtained) DESC
-            ) AS rank_position
+            ROUND(SUM(m.marks_obtained), 2) AS total_mark,
+            ROUND(SUM(m.max_marks), 2) AS max_mark,
+            ROUND(SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) * 100, 2) AS pct,
+            DENSE_RANK() OVER (ORDER BY SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) DESC) AS rk
         FROM students s
         JOIN marks m ON s.roll_no = m.roll_no
         WHERE (%s IS NULL OR s.class_name = %s)
+          AND (%s IS NULL OR s.section = %s)
         GROUP BY s.roll_no, s.name, s.class_name, s.section
-        ORDER BY rank_position, total_obtained DESC
+        ORDER BY rk, total_mark DESC
         LIMIT %s
         """
-        cur.execute(q, (cls, cls, lim))
-        return cur.fetchall()
+        cur.execute(q, (cls, cls, sec, sec, lim))
+        rows = cur.fetchall()
+
+    places = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+    res = []
+    for r in rows:
+        k = int(r["rk"])
+        pl = places[k - 1] if 1 <= k <= len(places) else str(k)
+        res.append({
+            "place": pl,
+            "rank": k,
+            "roll_no": r["roll_no"],
+            "name": r["name"],
+            "class_name": r["class_name"],
+            "section": r["section"],
+            "mark": float(r["total_mark"]),
+            "max_mark": float(r["max_mark"]),
+            "pct": float(r["pct"]),
+        })
+    return res
 
 
-def getsubtoppers(cls=None, sub=None, cfg=None):
-    # find who scored the most in each subject
-    with getcur(cfg) as (_, cur):
-        q = """
-        WITH ranked AS (
-            SELECT
-                sub.subject_name, s.roll_no, s.name,
-                s.class_name, s.section,
-                m.marks_obtained, m.max_marks,
-                ROUND(m.marks_obtained / NULLIF(m.max_marks, 0) * 100, 2) AS percentage,
-                DENSE_RANK() OVER (
-                    PARTITION BY sub.subject_id
-                    ORDER BY m.marks_obtained / NULLIF(m.max_marks, 0) DESC, m.marks_obtained DESC
-                ) AS rk
-            FROM marks m
-            JOIN students s ON s.roll_no = m.roll_no
-            JOIN subjects sub ON sub.subject_id = m.subject_id
-            WHERE (%s IS NULL OR s.class_name = %s)
-              AND (%s IS NULL OR LOWER(sub.subject_name) = LOWER(%s))
-        )
-        SELECT subject_name, roll_no, name, class_name, section,
-               marks_obtained, max_marks, percentage
-        FROM ranked
-        WHERE rk = 1
-        ORDER BY subject_name, name
-        """
-        cur.execute(q, (cls, cls, sub, sub))
-        return cur.fetchall()
+# ========== REPORT 2: OVERALL AVERAGE & RANGE DISTRIBUTION (IMAGE 1) ==========
 
-
-def getsubstats(cls=None, cfg=None):
-    # subject wise stats - average, highest, lowest marks
-    with getcur(cfg) as (_, cur):
+def getsummary(cls=None, sec=None):
+    # overall school average, distinction, 1st class, compartments and range table
+    with getcur() as (_, cur):
         q = """
         SELECT
+            s.roll_no, s.name,
+            SUM(m.marks_obtained) AS tot_got,
+            SUM(m.max_marks) AS tot_max,
+            ROUND(SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) * 100, 2) AS pct,
+            MIN(m.marks_obtained / NULLIF(m.max_marks, 0) * 100) AS min_p
+        FROM students s
+        JOIN marks m ON s.roll_no = m.roll_no
+        WHERE (%s IS NULL OR s.class_name = %s)
+          AND (%s IS NULL OR s.section = %s)
+        GROUP BY s.roll_no, s.name
+        """
+        cur.execute(q, (cls, cls, sec, sec))
+        rows = cur.fetchall()
+
+    n = len(rows)
+    if n == 0:
+        return {
+            "total": 0, "avg": 0.0, "dist": 0, "first": 0, "second": 0, "comp": 0,
+            "ranges": [
+                {"range": "Above 95% > 475", "cnt": 0, "pct": 0.0},
+                {"range": "91-94% (451-474)", "cnt": 0, "pct": 0.0},
+                {"range": "81-90% (401-450)", "cnt": 0, "pct": 0.0},
+                {"range": "75-80% (375-400)", "cnt": 0, "pct": 0.0},
+                {"range": "60-74% (300-374)", "cnt": 0, "pct": 0.0},
+                {"range": "Below 60% < 300", "cnt": 0, "pct": 0.0},
+            ]
+        }
+
+    sum_got = sum(float(r["tot_got"]) for r in rows)
+    sum_max = sum(float(r["tot_max"]) for r in rows)
+    avg_p = round(sum_got / sum_max * 100, 2) if sum_max > 0 else 0.0
+
+    c_dist = 0
+    c_1st = 0
+    c_2nd = 0
+    c_comp = 0
+
+    r_95 = 0
+    r_91_94 = 0
+    r_81_90 = 0
+    r_75_80 = 0
+    r_60_74 = 0
+    r_below_60 = 0
+
+    for r in rows:
+        p = float(r["pct"] or 0)
+        mp = float(r["min_p"] or 0)
+
+        if p >= 75.0:
+            c_dist += 1
+        if p >= 60.0:
+            c_1st += 1
+        elif 50.0 <= p < 60.0:
+            c_2nd += 1
+
+        if mp < 33.0 or p < 33.0:
+            c_comp += 1
+
+        # score distribution ranges
+        if p >= 95.0:
+            r_95 += 1
+        elif 91.0 <= p < 95.0:
+            r_91_94 += 1
+        elif 81.0 <= p < 91.0:
+            r_81_90 += 1
+        elif 75.0 <= p < 81.0:
+            r_75_80 += 1
+        elif 60.0 <= p < 75.0:
+            r_60_74 += 1
+        else:
+            r_below_60 += 1
+
+    ranges = [
+        {"range": "Above 95% > 475", "cnt": r_95, "pct": round(r_95 / n * 100, 2)},
+        {"range": "91-94% (451-474)", "cnt": r_91_94, "pct": round(r_91_94 / n * 100, 2)},
+        {"range": "81-90% (401-450)", "cnt": r_81_90, "pct": round(r_81_90 / n * 100, 2)},
+        {"range": "75-80% (375-400)", "cnt": r_75_80, "pct": round(r_75_80 / n * 100, 2)},
+        {"range": "60-74% (300-374)", "cnt": r_60_74, "pct": round(r_60_74 / n * 100, 2)},
+        {"range": "Below 60% < 300", "cnt": r_below_60, "pct": round(r_below_60 / n * 100, 2)},
+    ]
+
+    return {
+        "total": n,
+        "avg": avg_p,
+        "dist": c_dist,
+        "first": c_1st,
+        "second": c_2nd,
+        "comp": c_comp,
+        "ranges": ranges,
+    }
+
+
+# ========== REPORT 3: SUBJECT AVERAGE & STATS (IMAGE 1) ==========
+
+def getsubstats(cls=None, sec=None):
+    # subject name, student count, avg mark, highest mark, student count with highest, centum count, lowest
+    with getcur() as (_, cur):
+        q = """
+        SELECT
+            sub.subject_id,
             sub.subject_name,
-            COUNT(DISTINCT s.roll_no) AS total_students,
-            ROUND(AVG(m.marks_obtained), 2) AS avg_marks,
-            ROUND(MAX(m.marks_obtained), 2) AS highest_marks,
-            ROUND(MIN(m.marks_obtained), 2) AS lowest_marks,
-            MAX(m.max_marks) AS max_marks,
-            ROUND(AVG(m.marks_obtained / NULLIF(m.max_marks, 0) * 100), 2) AS avg_percentage
+            COUNT(DISTINCT s.roll_no) AS stu_cnt,
+            ROUND(AVG(m.marks_obtained), 2) AS avg_mark,
+            ROUND(MAX(m.marks_obtained), 2) AS high_mark,
+            ROUND(MIN(m.marks_obtained), 2) AS low_mark,
+            MAX(m.max_marks) AS max_m
         FROM subjects sub
         JOIN marks m ON sub.subject_id = m.subject_id
         JOIN students s ON s.roll_no = m.roll_no
         WHERE (%s IS NULL OR s.class_name = %s)
+          AND (%s IS NULL OR s.section = %s)
         GROUP BY sub.subject_id, sub.subject_name
         ORDER BY sub.subject_name
         """
-        cur.execute(q, (cls, cls))
+        cur.execute(q, (cls, cls, sec, sec))
+        subs = cur.fetchall()
+
+        res = []
+        for s in subs:
+            sid = s["subject_id"]
+            hi = s["high_mark"]
+
+            # count students who got highest mark
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM marks m JOIN students s ON s.roll_no = m.roll_no
+                WHERE m.subject_id = %s AND m.marks_obtained = %s
+                  AND (%s IS NULL OR s.class_name = %s)
+                  AND (%s IS NULL OR s.section = %s)
+                """,
+                (sid, hi, cls, cls, sec, sec),
+            )
+            hi_cnt = cur.fetchone()["c"]
+
+            # count centums (100)
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM marks m JOIN students s ON s.roll_no = m.roll_no
+                WHERE m.subject_id = %s AND (m.marks_obtained >= 100 OR m.marks_obtained = m.max_marks)
+                  AND (%s IS NULL OR s.class_name = %s)
+                  AND (%s IS NULL OR s.section = %s)
+                """,
+                (sid, cls, cls, sec, sec),
+            )
+            cent_cnt = cur.fetchone()["c"]
+
+            res.append({
+                "subject": s["subject_name"],
+                "stu_cnt": s["stu_cnt"],
+                "avg": float(s["avg_mark"]),
+                "high": float(hi),
+                "high_cnt": hi_cnt,
+                "cent_cnt": cent_cnt,
+                "low": float(s["low_mark"]),
+            })
+        return res
+
+
+# ========== REPORT 4: SUBJECT TOPPERS ROSTER (IMAGE 2) ==========
+
+def getsubtoppers(cls=None, sec=None, sub=None):
+    # subject toppers list with student names
+    with getcur() as (_, cur):
+        q = """
+        WITH ranked AS (
+            SELECT
+                sub.subject_name,
+                s.roll_no,
+                s.name,
+                s.class_name,
+                s.section,
+                m.marks_obtained,
+                DENSE_RANK() OVER (PARTITION BY sub.subject_id ORDER BY m.marks_obtained DESC) AS rk
+            FROM marks m
+            JOIN students s ON s.roll_no = m.roll_no
+            JOIN subjects sub ON sub.subject_id = m.subject_id
+            WHERE (%s IS NULL OR s.class_name = %s)
+              AND (%s IS NULL OR s.section = %s)
+              AND (%s IS NULL OR LOWER(sub.subject_name) = LOWER(%s))
+        )
+        SELECT subject_name, roll_no, name, class_name, section, marks_obtained
+        FROM ranked
+        WHERE rk = 1
+        ORDER BY subject_name, name
+        """
+        cur.execute(q, (cls, cls, sec, sec, sub, sub))
+        rows = cur.fetchall()
+
+    grps = {}
+    for r in rows:
+        sn = r["subject_name"]
+        if sn not in grps:
+            grps[sn] = {
+                "subject": sn,
+                "high": float(r["marks_obtained"]),
+                "students": [],
+            }
+        grps[sn]["students"].append({
+            "roll_no": r["roll_no"],
+            "name": r["name"],
+            "class_name": r["class_name"],
+            "section": r["section"],
+        })
+    return list(grps.values())
+
+
+# ========== MERIT LIST & FILTERS ==========
+
+def getmeritlist(cls=None, sec=None):
+    # complete rank list of students
+    with getcur() as (_, cur):
+        q = """
+        SELECT
+            s.roll_no, s.name, s.class_name, s.section,
+            ROUND(SUM(m.marks_obtained), 2) AS tot_got,
+            ROUND(SUM(m.max_marks), 2) AS tot_max,
+            ROUND(SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) * 100, 2) AS pct,
+            MIN(m.marks_obtained / NULLIF(m.max_marks, 0) * 100) AS min_p,
+            DENSE_RANK() OVER (ORDER BY SUM(m.marks_obtained) / NULLIF(SUM(m.max_marks), 0) DESC) AS rk
+        FROM students s
+        JOIN marks m ON s.roll_no = m.roll_no
+        WHERE (%s IS NULL OR s.class_name = %s)
+          AND (%s IS NULL OR s.section = %s)
+        GROUP BY s.roll_no, s.name, s.class_name, s.section
+        ORDER BY rk, s.roll_no
+        """
+        cur.execute(q, (cls, cls, sec, sec))
+        rows = cur.fetchall()
+
+    res = []
+    for r in rows:
+        p = float(r["pct"] or 0)
+        mp = float(r["min_p"] or 0)
+        if mp < 33.0 or p < 33.0:
+            st = "Compartment"
+        elif p >= 75.0:
+            st = "Distinction"
+        elif p >= 60.0:
+            st = "1st Class"
+        elif p >= 50.0:
+            st = "2nd Class"
+        else:
+            st = "Pass"
+
+        res.append({
+            "rank": int(r["rk"]),
+            "roll_no": r["roll_no"],
+            "name": r["name"],
+            "class_name": r["class_name"],
+            "section": r["section"],
+            "tot_got": float(r["tot_got"]),
+            "tot_max": float(r["tot_max"]),
+            "pct": p,
+            "status": st,
+        })
+    return res
+
+
+def getcentums(cls=None, sec=None):
+    # students scoring 100
+    with getcur() as (_, cur):
+        q = """
+        SELECT sub.subject_name, s.roll_no, s.name, s.class_name, s.section, m.marks_obtained
+        FROM marks m
+        JOIN students s ON s.roll_no = m.roll_no
+        JOIN subjects sub ON sub.subject_id = m.subject_id
+        WHERE (m.marks_obtained >= 100 OR m.marks_obtained = m.max_marks)
+          AND (%s IS NULL OR s.class_name = %s)
+          AND (%s IS NULL OR s.section = %s)
+        ORDER BY sub.subject_name, s.name
+        """
+        cur.execute(q, (cls, cls, sec, sec))
         return cur.fetchall()
 
 
-def comparetwo(rno1, rno2, cfg=None):
-    # compare two students side by side across all subjects
-    r1 = fetchreport(rno1, cfg)
-    r2 = fetchreport(rno2, cfg)
+def getbycategory(cat, cls=None, sec=None):
+    # filter students by distinction / 1st class / compartment
+    all_s = getmeritlist(cls, sec)
+    c = cat.lower()
+    if c == "distinction":
+        return [s for s in all_s if s["pct"] >= 75.0]
+    elif c == "1st":
+        return [s for s in all_s if s["pct"] >= 60.0]
+    elif c == "compartment":
+        return [s for s in all_s if s["status"] == "Compartment"]
+    return all_s
 
-    if not r1 or not r2:
+
+def getsubroster(sub, cls=None, sec=None, minm=None):
+    # list students for a specific subject
+    with getcur() as (_, cur):
+        q = """
+        SELECT
+            s.roll_no, s.name, s.class_name, s.section,
+            sub.subject_name, m.marks_obtained, m.max_marks,
+            ROUND(m.marks_obtained / NULLIF(m.max_marks, 0) * 100, 2) AS pct,
+            DENSE_RANK() OVER (ORDER BY m.marks_obtained DESC) AS rk
+        FROM marks m
+        JOIN students s ON s.roll_no = m.roll_no
+        JOIN subjects sub ON sub.subject_id = m.subject_id
+        WHERE LOWER(sub.subject_name) = LOWER(%s)
+          AND (%s IS NULL OR s.class_name = %s)
+          AND (%s IS NULL OR s.section = %s)
+          AND (%s IS NULL OR m.marks_obtained >= %s)
+        ORDER BY m.marks_obtained DESC, s.name
+        """
+        cur.execute(q, (sub, cls, cls, sec, sec, minm, minm))
+        return cur.fetchall()
+
+
+def getbyrange(minp, maxp, cls=None, sec=None):
+    # filter students within a percentage range
+    all_s = getmeritlist(cls, sec)
+    return [s for s in all_s if minp <= s["pct"] <= maxp]
+
+
+def getreportcard(qval):
+    # get marks for one student
+    qval = str(qval).strip()
+    with getcur() as (_, cur):
+        q = """
+        SELECT
+            s.roll_no, s.name, s.class_name, s.section,
+            sub.subject_name, m.marks_obtained, m.max_marks
+        FROM students s
+        LEFT JOIN marks m ON s.roll_no = m.roll_no
+        LEFT JOIN subjects sub ON sub.subject_id = m.subject_id
+        WHERE s.roll_no = %s OR LOWER(s.name) = LOWER(%s)
+        ORDER BY sub.subject_name
+        """
+        cur.execute(q, (qval, qval))
+        return cur.fetchall()
+
+
+def comparestuds(r1, r2):
+    # compare two students side by side
+    d1 = getreportcard(r1)
+    d2 = getreportcard(r2)
+    if not d1 or not d2:
         return None
 
-    s1 = r1[0]
-    s2 = r2[0]
+    s1 = d1[0]
+    s2 = d2[0]
 
-    m1 = {r["subject_name"]: r for r in r1 if r.get("subject_name")}
-    m2 = {r["subject_name"]: r for r in r2 if r.get("subject_name")}
+    m1 = {r["subject_name"]: float(r["marks_obtained"]) for r in d1 if r.get("subject_name")}
+    m2 = {r["subject_name"]: float(r["marks_obtained"]) for r in d2 if r.get("subject_name")}
+    all_subs = sorted(list(set(m1.keys()) | set(m2.keys())))
 
-    allsubs = sorted(list(set(m1.keys()) | set(m2.keys())))
-
-    comp = []
+    rows = []
     t1, t2 = 0.0, 0.0
-    mx1, mx2 = 0.0, 0.0
+    for sub in all_subs:
+        v1 = m1.get(sub)
+        v2 = m2.get(sub)
+        if v1 is not None:
+            t1 += v1
+        if v2 is not None:
+            t2 += v2
+        d = round((v1 or 0) - (v2 or 0), 2)
+        ldr = s1["name"] if d > 0 else (s2["name"] if d < 0 else "Tie")
+        rows.append({"sub": sub, "v1": v1, "v2": v2, "diff": d, "leader": ldr})
 
-    for sub in allsubs:
-        a = m1.get(sub)
-        b = m2.get(sub)
-
-        o1 = float(a["marks_obtained"]) if a and a.get("marks_obtained") is not None else None
-        x1 = float(a["max_marks"]) if a and a.get("max_marks") is not None else None
-        o2 = float(b["marks_obtained"]) if b and b.get("marks_obtained") is not None else None
-        x2 = float(b["max_marks"]) if b and b.get("max_marks") is not None else None
-
-        if o1 is not None:
-            t1 += o1
-            mx1 += (x1 or 100.0)
-        if o2 is not None:
-            t2 += o2
-            mx2 += (x2 or 100.0)
-
-        if o1 is not None and o2 is not None:
-            d = round(o1 - o2, 2)
-            if d > 0:
-                ld = s1["name"]
-            elif d < 0:
-                ld = s2["name"]
-            else:
-                ld = "Tie"
-        elif o1 is not None:
-            d = round(o1, 2)
-            ld = s1["name"]
-        elif o2 is not None:
-            d = round(-o2, 2)
-            ld = s2["name"]
-        else:
-            d = 0.0
-            ld = "N/A"
-
-        comp.append({
-            "subject": sub,
-            "student_1_marks": o1,
-            "student_2_marks": o2,
-            "difference": d,
-            "leader": ld,
-        })
-
-    p1 = round((t1 / mx1 * 100), 2) if mx1 else 0.0
-    p2 = round((t2 / mx2 * 100), 2) if mx2 else 0.0
-
-    boss = s1["name"] if p1 > p2 else (s2["name"] if p2 > p1 else "Tie")
+    p1 = round(t1 / (len(m1) * 100) * 100, 2) if m1 else 0.0
+    p2 = round(t2 / (len(m2) * 100) * 100, 2) if m2 else 0.0
+    ldr = s1["name"] if p1 > p2 else (s2["name"] if p2 > p1 else "Tie")
 
     return {
-        "student_1": {
-            "roll_no": s1["roll_no"],
-            "name": s1["name"],
-            "class_name": s1["class_name"],
-            "total_obtained": round(t1, 2),
-            "total_max": round(mx1, 2),
-            "percentage": p1,
-        },
-        "student_2": {
-            "roll_no": s2["roll_no"],
-            "name": s2["name"],
-            "class_name": s2["class_name"],
-            "total_obtained": round(t2, 2),
-            "total_max": round(mx2, 2),
-            "percentage": p2,
-        },
-        "overall_leader": boss,
-        "difference_percentage": round(abs(p1 - p2), 2),
-        "subject_comparison": comp,
+        "s1": {"roll_no": s1["roll_no"], "name": s1["name"], "cls": s1["class_name"], "tot": t1, "pct": p1},
+        "s2": {"roll_no": s2["roll_no"], "name": s2["name"], "cls": s2["class_name"], "tot": t2, "pct": p2},
+        "leader": ldr,
+        "diff_pct": round(abs(p1 - p2), 2),
+        "subs": rows,
     }

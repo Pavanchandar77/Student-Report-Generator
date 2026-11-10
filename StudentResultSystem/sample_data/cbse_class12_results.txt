@@ -1,0 +1,18 @@
+Roll No | Name | Class | Section | English | Math | Physics | Chemistry | Biology | Computer Science | Economics | Business Studies | Accountancy | Information Practices | History | Political Science | Psychology | Sociology
+12001 | RIYA ANAND | STD XII | A | 99 | 99 | - | 98 | - | - | 98 | - | - | - | - | 100 | - | -
+12002 | AKSHAY S BABU | STD XII | C | 97 | - | - | - | - | - | 98 | - | - | - | 99 | 100 | - | 99
+12003 | MAHATHI J M | STD XII | C | 97 | - | - | - | - | - | 96 | - | - | - | 99 | 100 | 100 | -
+12004 | ARYAN MONISH CHANDRAN | STD XII | A | 100 | 92 | 90 | 94 | - | 96 | - | - | - | - | - | - | - | -
+12005 | ANIRUDDH R | STD XII | A | 94 | 100 | 92 | 95 | - | 98 | - | - | - | - | - | - | - | -
+12006 | SVESHAA SIVAKUMAR | STD XII | A | 96 | 95 | 96 | 98 | - | 95 | - | - | - | - | - | - | - | -
+12007 | B A SWAMI | STD XII | B | 92 | - | 88 | 98 | 95 | - | - | - | - | - | - | - | 100 | -
+12008 | S GOPALAKRISHNAN | STD XII | A | 91 | 94 | 93 | 98 | - | 94 | - | - | - | - | - | - | - | -
+12009 | TARUNIMA UDAYASANKAR | STD XII | B | 95 | - | 89 | 94 | 98 | - | - | - | - | - | - | - | 92 | -
+12010 | ABHAY S BABU | STD XII | A | 93 | 96 | 91 | 92 | - | 100 | - | - | - | - | - | - | - | -
+12011 | VISHNU RAMAN A | STD XII | B | 95 | - | - | - | - | - | 99 | 100 | 96 | - | - | - | - | 90
+12012 | SARVIKHA R | STD XII | B | 94 | - | - | - | - | - | 99 | 95 | 94 | - | - | - | 92 | -
+12013 | HASINI K N | STD XII | B | 96 | - | - | - | - | - | 92 | 94 | 100 | - | - | - | - | 88
+12014 | PRANATHI KRISHNA VITTALDEV | STD XII | B | 95 | - | - | - | - | - | 90 | 92 | 93 | 100 | - | - | - | -
+12015 | VARSHINI S | STD XII | C | 94 | - | - | - | - | - | - | - | - | - | 95 | 96 | 100 | 99
+12016 | A HASHRIDA | STD XII | C | 93 | - | - | - | - | - | - | - | - | - | 92 | 95 | 100 | 94
+12017 | K INIYAN | STD XII | C | 92 | - | - | - | - | - | - | - | - | - | 94 | 96 | 91 | 99
