@@ -111,6 +111,7 @@ def importtxt():
     sc = len(res.get("studs", []))
     mc = len(res.get("marks", []))
     errs = res.get("errs", [])
+    meta = res.get("meta", {})
 
     if sc == 0:
         console.print("[bold red][X] No student records found in file.[/bold red]")
@@ -118,6 +119,16 @@ def importtxt():
         return
 
     tbl = Table(title=f"Parsed Summary: {fp.name}", box=box.ROUNDED)
+    tbl.add_column("Property / Metric", style="cyan bold")
+    tbl.add_column("Value", justify="right", style="green bold")
+    if meta.get("school"):
+        tbl.add_row("School detected", meta["school"])
+    if meta.get("year"):
+        tbl.add_row("Exam Year", meta["year"])
+    tbl.add_row("Students found", str(sc))
+    tbl.add_row("Marks found", str(mc))
+    tbl.add_row("Warnings", str(len(errs)))
+    console.print(tbl)
     tbl.add_column("Metric", style="cyan bold")
     tbl.add_column("Count", justify="right", style="green bold")
     tbl.add_row("Students found", str(sc))
@@ -679,10 +690,14 @@ def makefullsheet():
         return
 
     # build complete document
+    sch_title = database.getschoolmeta("school", "Chinmaya Vidyalaya, Anna Nagar, Chennai - 600 040.")
+    yr = database.getschoolmeta("year", "2025-26")
+    ex_hdr = f"CBSE EXAM STD - XII RESULT ANALYSIS ({yr})" if yr else "CBSE EXAM STD - XII RESULT ANALYSIS"
+
     lines = [
         "Hari Om",
-        "Chinmaya Vidyalaya, Anna Nagar, Chennai - 600 040.",
-        "CBSE EXAM STD - XII RESULT ANALYSIS (2025-26)",
+        sch_title,
+        ex_hdr,
         "=" * 82,
         "",
         "NEW SCHOOL TOPPERS",

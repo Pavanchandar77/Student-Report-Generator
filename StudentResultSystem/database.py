@@ -76,6 +76,14 @@ def initdb():
     with getcur() as (_, cur):
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS school_meta (
+                k VARCHAR(50) PRIMARY KEY,
+                v VARCHAR(255)
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS students (
                 student_id INT AUTO_INCREMENT PRIMARY KEY,
                 roll_no VARCHAR(50) NOT NULL UNIQUE,
@@ -116,7 +124,32 @@ def resetdb():
         cur.execute("TRUNCATE TABLE marks")
         cur.execute("TRUNCATE TABLE students")
         cur.execute("TRUNCATE TABLE subjects")
+        try:
+            cur.execute("TRUNCATE TABLE school_meta")
+        except Exception:
+            pass
         cur.execute("SET FOREIGN_KEY_CHECKS = 1")
+
+
+def setschoolmeta(k, v):
+    # save school metadata (school name, year, class)
+    initdb()
+    with getcur() as (_, cur):
+        cur.execute(
+            "INSERT INTO school_meta (k, v) VALUES (%s, %s) ON DUPLICATE KEY UPDATE v = VALUES(v)",
+            (str(k), str(v)),
+        )
+
+
+def getschoolmeta(k, def_val=""):
+    # get school metadata
+    try:
+        with getcur() as (_, cur):
+            cur.execute("SELECT v FROM school_meta WHERE k = %s", (str(k),))
+            row = cur.fetchone()
+            return row["v"] if row else def_val
+    except Exception:
+        return def_val
 
 
 # ========== INSERT / UPDATE DATA ==========
@@ -159,6 +192,45 @@ def savemark(rno, sid, got, mx=100.0):
         """
         cur.execute(q, (str(rno).strip(), sid, float(got), float(mx)))
         return cur.rowcount
+
+
+def saveall(studs, marks):
+    # fast batch insert of students and marks in a single transaction
+    initdb()
+    with getcur() as (_, cur):
+        # cache subjects
+        sub_names = list({m["sub"] for m in marks if m.get("sub")})
+        sub_map = {}
+        for sn in sub_names:
+            cur.execute("SELECT subject_id FROM subjects WHERE LOWER(subject_name) = LOWER(%s)", (sn,))
+            row = cur.fetchone()
+            if row:
+                sub_map[sn] = int(row["subject_id"])
+            else:
+                cur.execute("INSERT INTO subjects (subject_name) VALUES (%s)", (sn,))
+                sub_map[sn] = int(cur.lastrowid)
+
+        # batch students
+        q_st = """
+        INSERT INTO students (roll_no, name, class_name, section)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE name = VALUES(name), class_name = VALUES(class_name), section = VALUES(section)
+        """
+        st_rows = [(st["rno"], st["nm"], st.get("cls", "STD XII"), st.get("sec", "A")) for st in studs]
+        if st_rows:
+            cur.executemany(q_st, st_rows)
+
+        # batch marks
+        q_mk = """
+        INSERT INTO marks (roll_no, subject_id, marks_obtained, max_marks)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE marks_obtained = VALUES(marks_obtained), max_marks = VALUES(max_marks)
+        """
+        mk_rows = [(m["rno"], sub_map[m["sub"]], float(m["got"]), float(m.get("mx", 100.0))) for m in marks if m.get("sub") in sub_map]
+        if mk_rows:
+            cur.executemany(q_mk, mk_rows)
+
+    return len(st_rows), len(mk_rows)
 
 
 # ========== DROPDOWN / LIST QUERIES ==========

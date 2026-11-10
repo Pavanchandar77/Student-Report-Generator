@@ -1,11 +1,53 @@
 # file_handler.py - parses text files and saves student data to mysql
-# supports wide table (Pipe/Tab/Comma), block format, or standard columns
+# supports official CBSE Gazette files (.txt), wide tables, and block format
 
 import csv
 import io
 import re
 from pathlib import Path
 import database
+
+# official CBSE subject code mapping
+CBSE_CODES = {
+    # Languages
+    "301": "English",
+    "302": "Hindi",
+    "303": "Urdu",
+    "304": "Sanskrit",
+    "318": "Tamil",
+    "322": "Sanskrit Core",
+    "001": "English Elective",
+    "002": "Hindi Elective",
+    "022": "Sanskrit Elective",
+    "101": "English Communicative",
+    # Science & Tech
+    "041": "Math",
+    "042": "Physics",
+    "043": "Chemistry",
+    "044": "Biology",
+    "048": "Physical Education",
+    "083": "Computer Science",
+    "065": "Information Practices",
+    "045": "Biotechnology",
+    "241": "Applied Mathematics",
+    # Commerce & Management
+    "030": "Economics",
+    "054": "Business Studies",
+    "055": "Accountancy",
+    "066": "Entrepreneurship",
+    # Humanities & Social Sciences
+    "027": "History",
+    "028": "Political Science",
+    "029": "Geography",
+    "037": "Psychology",
+    "039": "Sociology",
+    "074": "Legal Studies",
+    "049": "Painting",
+    "050": "Graphics",
+    "051": "Sculpture",
+    "052": "Applied Art",
+    "064": "Home Science",
+}
 
 # common subject name aliases
 SUB_MAP = {
@@ -41,8 +83,57 @@ def parseval(v):
     return float(s), 100.0
 
 
+def parsecbse(raw, def_cls="STD XII", def_sec="A"):
+    # parser for official CBSE Gazette text files
+    # extracts school name, exam year, roll no, student name, and all subject marks
+    sch_m = re.search(r"SCHOOL\s*:\s*\d+\s+([^\r\n]+)", raw)
+    school = sch_m.group(1).strip() if sch_m else "Chinmaya Vidyalaya"
+
+    ex_m = re.search(r"CBSE-([A-Z\s\-]+EXAMINATION)\s+(\d{4})", raw)
+    year = ex_m.group(2).strip() if ex_m else ""
+    cls_name = f"STD XII - {year}" if year else def_cls
+
+    studs = {}
+    mks = []
+    errs = []
+
+    # candidate line regex: 7-8 digit roll number, followed by candidate name, followed by 3-digit subject code
+    c_pat = re.compile(r"^\s*(\d{7,8})\s+([A-Za-z\s\.\'\-]+?)\s+(\d{3}\s+.*)$", re.MULTILINE)
+    # subject block regex: 3-digit code, marks (optionally with trailing letter F), and grade
+    sub_pat = re.compile(r"(\d{3})\s+([0-9]{2,3}[A-Za-z]?|[A-Za-z]{2,3})\s+([A-Z0-9]{1,2})")
+
+    for m in c_pat.finditer(raw):
+        rno = m.group(1).strip()
+        nm = m.group(2).strip()
+        rest = m.group(3)
+
+        if rno not in studs:
+            studs[rno] = {"rno": rno, "nm": nm, "cls": cls_name, "sec": def_sec}
+
+        subs = sub_pat.findall(rest)
+        if not subs:
+            errs.append(f"Student {rno} ({nm}): no subject marks parsed.")
+
+        for sc, mv, gr in subs:
+            sub_name = CBSE_CODES.get(sc, f"Sub-{sc}")
+            digits = re.sub(r"[^\d\.]", "", mv)
+            if digits:
+                got = float(digits)
+            else:
+                got = 0.0  # absent / no mark
+
+            mks.append({"rno": rno, "sub": sub_name, "got": got, "mx": 100.0})
+
+    return {
+        "studs": list(studs.values()),
+        "marks": mks,
+        "errs": errs,
+        "meta": {"school": school, "year": year, "class_name": cls_name},
+    }
+
+
 def parsetxt(p, def_cls="STD XII", def_sec="A"):
-    # read and parse .txt file
+    # read and parse .txt file (CBSE gazette, block format, or table)
     fp = Path(p) if isinstance(p, (str, Path)) else None
     if fp and fp.exists():
         try:
@@ -56,17 +147,25 @@ def parsetxt(p, def_cls="STD XII", def_sec="A"):
     clean = [l for l in lines if l and not l.startswith("#") and not l.startswith("//")]
 
     if not clean:
-        return {"studs": [], "marks": [], "errs": ["File is empty."]}
+        return {"studs": [], "marks": [], "errs": ["File is empty."], "meta": {}}
+
+    # 1. Check if official CBSE Gazette format
+    is_cbse = (
+        "CBSE-SENIOR SCHOOL" in raw
+        or "CBSE-SECONDARY SCHOOL" in raw
+        or bool(re.search(r"^\s*\d{7,8}\s+[A-Za-z\s\.\'\-]+\s+\d{3}\s+[0-9]{2,3}", raw, re.MULTILINE))
+    )
+    if is_cbse:
+        return parsecbse(raw, def_cls=def_cls, def_sec=def_sec)
 
     studs = {}
     mks = []
     errs = []
 
-    # check if key-value block format (Roll No: ..., Name: ...)
+    # 2. Check if key-value block format (Roll No: ..., Name: ...)
     is_block = sum(1 for l in clean if re.match(r"^(roll|roll_no|name|class)\s*:", l, re.IGNORECASE)) >= 2
 
     if is_block:
-        # block format
         blks = re.split(r"\n\s*(?:[-=]{3,}|\n)\s*", raw)
         for b in blks:
             bl = [x.strip() for x in b.splitlines() if x.strip() and not x.strip().startswith("#")]
@@ -131,7 +230,7 @@ def parsetxt(p, def_cls="STD XII", def_sec="A"):
                 }
 
     else:
-        # tabular / delimited format
+        # 3. Delimited or tabular format
         dlm = None
         for d in ["\t", "|", ",", ";"]:
             if d in clean[0]:
@@ -145,7 +244,7 @@ def parsetxt(p, def_cls="STD XII", def_sec="A"):
             rows = [re.split(r"\s{2,}|\t", l) for l in clean if l]
 
         if not rows:
-            return {"studs": [], "marks": [], "errs": ["No rows found."]}
+            return {"studs": [], "marks": [], "errs": ["No rows found."], "meta": {}}
 
         hdrs = [h.strip().lower().replace(" ", "_") for h in rows[0]]
 
@@ -198,23 +297,25 @@ def parsetxt(p, def_cls="STD XII", def_sec="A"):
         "studs": list(studs.values()),
         "marks": mks,
         "errs": errs,
+        "meta": {},
     }
 
 
 def savetodb(parsed):
     # save parsed data into mysql
     database.initdb()
-    s_cnt = 0
-    m_cnt = 0
 
-    for st in parsed.get("studs", []):
-        database.savestud(rno=st["rno"], nm=st["nm"], cls=st.get("cls"), sec=st.get("sec"))
-        s_cnt += 1
+    meta = parsed.get("meta", {})
+    if meta.get("school"):
+        database.setschoolmeta("school", meta["school"])
+    if meta.get("year"):
+        database.setschoolmeta("year", meta["year"])
+    if meta.get("class_name"):
+        database.setschoolmeta("class_name", meta["class_name"])
 
-    for mk in parsed.get("marks", []):
-        sid = database.getsubid(mk["sub"])
-        database.savemark(rno=mk["rno"], sid=sid, got=mk["got"], mx=mk.get("mx", 100.0))
-        m_cnt += 1
+    studs = parsed.get("studs", [])
+    mks = parsed.get("marks", [])
+    s_cnt, m_cnt = database.saveall(studs, mks)
 
     return {"studs_saved": s_cnt, "marks_saved": m_cnt}
 
@@ -225,4 +326,5 @@ def savetxt(txt, fname="report.txt"):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(txt, encoding="utf-8")
     return p
+
 
